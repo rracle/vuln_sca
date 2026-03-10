@@ -2,59 +2,88 @@ class BlackDuckScanner:
     def __init__(self, auth_instance):
         self.auth = auth_instance
         self.session = auth_instance.session
-        self.base_url = auth_instance.base_url
+        self.base_url = auth_instance.base_url.rstrip("/")
+
+    def _get_json(self, url, params=None, accept=None):
+        headers = {}
+        if accept:
+            headers["Accept"] = accept
+        res = self.session.get(url, params=params, headers=headers)
+        res.raise_for_status()
+        return res.json()
+
+    def _iter_paged_items(self, url, params=None, accept=None, limit=100):
+        offset = 0
+        while True:
+            p = dict(params or {})
+            p["limit"] = limit
+            p["offset"] = offset
+
+            data = self._get_json(url, params=p, accept=accept)
+            items = data.get("items", []) or []
+            if not items:
+                break
+
+            for it in items:
+                yield it
+
+            offset += len(items)
+            total = data.get("totalCount")
+            if isinstance(total, int) and offset >= total:
+                break
 
     def get_critical_components_in_group(self, group_id):
-        """특정 프로젝트 그룹 내의 Critical 컴포넌트 리스트 추출"""
+        """특정 프로젝트 그룹 내의 Critical(만) 취약 컴포넌트 리스트 추출"""
         results = []
-        # 프로젝트 그룹 내 프로젝트 목록 API
+
         group_url = f"{self.base_url}/api/project-groups/{group_id}/projects"
-        
+
         try:
-            projects_res = self.session.get(group_url, params={"limit": 50})
-            projects = projects_res.json().get('items', [])
+            projects_res = self._get_json(group_url, params={"limit": 50})
+            projects = projects_res.get("items", []) or []
 
             for project in projects:
-                project_name = project['name']
-                # 최신 버전 정보 가져오기 (첫 번째 아이템 기준)
-                versions_url = project['_meta']['href'] + "/versions"
-                versions = self.session.get(versions_url, params={"limit": 1}).json().get('items', [])
-                
+                project_name = project.get("name", "Unknown")
+                project_href = (project.get("_meta") or {}).get("href")
+                if not project_href:
+                    continue
+
+                # 최신 버전 1개
+                versions_url = f"{project_href}/versions"
+                versions = self._get_json(versions_url, params={"limit": 1}).get("items", []) or []
                 if not versions:
                     continue
-                
-                version_href = versions[0]['_meta']['href']
+
+                version = versions[0]
+                version_name = version.get("versionName", "Unknown")
+                version_href = (version.get("_meta") or {}).get("href")
+                if not version_href:
+                    continue
+
+                # vulnerable bom components (paged)
                 vuln_url = f"{version_href}/vulnerable-bom-components"
-                vuln_params = {
-                    "filter": [
-                        "securityRisk:CRITICAL",
-                        "securityRisk:HIGH",
-                    ],
-                    "limit": 100,
-                }
+                accept = "application/vnd.blackducksoftware.bill-of-materials-6+json"
 
-                vuln_res = self.session.get(
-                    vuln_url, 
-                    headers={"Accept": "application/vnd.blackducksoftware.bill-of-materials-6+json"}, 
-                    params=vuln_params,
-                )
-                for item in vuln_res.json().get('items', []):
-                    vuln_info = item.get('vulnerability', {})
-                    severity = vuln_info.get('severity')
+                for item in self._iter_paged_items(vuln_url, params={}, accept=accept, limit=100):
+                    vwr = item.get("vulnerabilityWithRemediation") or {}
+                    severity = (vwr.get("severity") or "").upper()
 
-                    if severity not in ('CRITICAL', 'HIGH'):
+                    # CRITICAL만
+                    if severity != "CRITICAL":
                         continue
-                    
-                    vuln_name = vuln_info.get('vulnerabilityId', 'Unknown')
-                    
-                    results.append({
-                        "Project": project_name,
-                        "Version": versions[0]['versionName'],
-                        "Component": item.get('componentName'),
-                        "Component_Version": item.get('componentVersionName', 'Unknown'),
-                        "Vulnerability": vuln_name,
-                    })
+
+                    results.append(
+                        {
+                            "Project": project_name,
+                            "Version": version_name,
+                            "Component": item.get("componentName"),
+                            "Component_Version": item.get("componentVersionName", "Unknown"),
+                            "Vulnerability": vwr.get("vulnerabilityName", "Unknown"),  # CVE-... or BDSA-...
+                        }
+                    )
+
             return results
+
         except Exception as e:
             print(f"데이터 조회 중 에러 발생: {e}")
             return []
