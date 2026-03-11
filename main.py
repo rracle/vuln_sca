@@ -28,7 +28,7 @@ def main():
     # 4. 결과 출력
     print(f"\n--- 총 {len(critical_list)}개의 취약점 발견 ---")
     for item in critical_list:
-        print(f"[{item['Project']}] {item['Component']} ({item['Component_Version']}) -> {item['Vulnerability']}")
+        print(f"[{item['Project']}] [{item['Version']}] {item['Component']} ({item['Component_Version']}) -> {item['Vulnerability']}")
 
 if __name__ == "__main__":
     main()

@@ -35,6 +35,7 @@ class BlackDuckScanner:
     def get_critical_components_in_group(self, group_id):
         """특정 프로젝트 그룹 내의 Critical(만) 취약 컴포넌트 리스트 추출"""
         results = []
+        seen = set()
 
         group_url = f"{self.base_url}/api/project-groups/{group_id}/projects"
 
@@ -43,7 +44,7 @@ class BlackDuckScanner:
             projects = projects_res.get("items", []) or []
 
             for project in projects:
-                project_name = project.get("name", "Unknown")
+                project_name = project.get("name", "unknown")
                 project_href = (project.get("_meta") or {}).get("href")
                 if not project_href:
                     continue
@@ -55,7 +56,7 @@ class BlackDuckScanner:
                     continue
 
                 version = versions[0]
-                version_name = version.get("versionName", "Unknown")
+                version_name = version.get("versionName", "unknown")
                 version_href = (version.get("_meta") or {}).get("href")
                 if not version_href:
                     continue
@@ -70,7 +71,19 @@ class BlackDuckScanner:
 
                     # CRITICAL만
                     if severity != "CRITICAL":
+                    # if severity not in ["CRITICAL", "HIGH"]:
                         continue
+                    
+                    key = (
+                        project_name,
+                        version_name,
+                        item.get("componentName"),
+                        item.get("componentVersionName"),
+                        vwr.get("vulnerabilityName"),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
 
                     results.append(
                         {
